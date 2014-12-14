@@ -826,10 +826,22 @@ codegenIntegralScalar :: IntegralType a -> a -> C.Exp
 codegenIntegralScalar ty x | IntegralDict <- integralDict ty = [cexp| ( $ty:(codegenIntegralType ty) ) $exp:(cintegral x) |]
 
 codegenFloatingScalar :: FloatingType a -> a -> C.Exp
-codegenFloatingScalar (TypeFloat   _) x = C.Const (C.FloatConst (shows x "f") (toRational x) noLoc) noLoc
-codegenFloatingScalar (TypeCFloat  _) x = C.Const (C.FloatConst (shows x "f") (toRational x) noLoc) noLoc
-codegenFloatingScalar (TypeDouble  _) x = C.Const (C.DoubleConst (show x) (toRational x) noLoc) noLoc
-codegenFloatingScalar (TypeCDouble _) x = C.Const (C.DoubleConst (show x) (toRational x) noLoc) noLoc
+codegenFloatingScalar (TypeFloat   _) x | isNaN x      = [cexp| CUDART_NAN_F |]
+                                        | isInfinite x = if x < 0 then [cexp|  CUDART_INF_F |]
+                                                                  else [cexp| -CUDART_INF_F |]
+                                        | otherwise    = C.Const (C.FloatConst (shows x "f") (toRational x) noLoc) noLoc
+codegenFloatingScalar (TypeCFloat  _) x | isNaN x      = [cexp| CUDART_NAN_F |]
+                                        | isInfinite x = if x < 0 then [cexp|  CUDART_INF_F |]
+                                                                  else [cexp| -CUDART_INF_F |]
+                                        | otherwise    = C.Const (C.FloatConst (shows x "f") (toRational x) noLoc) noLoc
+codegenFloatingScalar (TypeDouble  _) x | isNaN x      = [cexp| CUDART_NAN |]
+                                        | isInfinite x = if x < 0 then [cexp|  CUDART_INF |]
+                                                                  else [cexp| -CUDART_INF |]
+                                        | otherwise    = C.Const (C.DoubleConst (show x) (toRational x) noLoc) noLoc
+codegenFloatingScalar (TypeCDouble _) x | isNaN x      = [cexp| CUDART_NAN |]
+                                        | isInfinite x = if x < 0 then [cexp|  CUDART_INF |]
+                                                                  else [cexp| -CUDART_INF |]
+                                        | otherwise    = C.Const (C.DoubleConst (show x) (toRational x) noLoc) noLoc
 
 codegenNonNumScalar :: NonNumType a -> a -> C.Exp
 codegenNonNumScalar (TypeBool   _) x = cbool x
