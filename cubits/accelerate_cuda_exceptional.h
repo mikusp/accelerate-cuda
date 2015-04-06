@@ -17,7 +17,9 @@
  * Exceptional values have slightly different names than what are produced by
  * the code generator.
  */
+#ifndef __CUDACC_RTC__
 #include <math.h>
+#endif
 
 #define Infinity INFINITY
 #define NaN      NAN

@@ -13,8 +13,10 @@
 #ifndef __ACCELERATE_CUDA_ASSERT_H__
 #define __ACCELERATE_CUDA_ASSERT_H__
 
+#ifndef __CUDACC_RTC__
 #include <assert.h>
 #include <cuda_runtime.h>
+#endif
 
 /*
  * assert() is only supported for devices of compute capability 2.0 and higher

@@ -13,7 +13,10 @@
 #ifndef __ACCELERATE_CUDA_FUNCTION_H__
 #define __ACCELERATE_CUDA_FUNCTION_H__
 
+#ifndef __CUDACC_RTC__
 #include <cuda_runtime.h>
+#endif
+
 #include "accelerate_cuda_type.h"
 
 #ifdef __cplusplus

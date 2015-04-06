@@ -24,7 +24,10 @@
 #ifndef __ACCELERATE_CUDA_TEXTURE_H__
 #define __ACCELERATE_CUDA_TEXTURE_H__
 
+#ifndef __CUDACC_RTC__
 #include <cuda_runtime.h>
+#endif
+
 #include "accelerate_cuda_type.h"
 
 #if defined(__cplusplus) && defined(__CUDACC__)
