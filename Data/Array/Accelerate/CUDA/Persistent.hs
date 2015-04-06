@@ -177,8 +177,7 @@ data KernelEntry
   -- A currently compiling external process. We record the path of the .cu file
   -- being compiled, and an MVar that will be filled upon completion.
   --
-  = CompileProcess !FilePath
-                   {-# UNPACK #-} !(MVar ())
+  = CompileCall {-# UNPACK #-} !(MVar ByteString)
 
   -- The raw compiled data, and the list of contexts that the object has already
   -- been linked into. If we locate this entry in the ProgramCache, it may have
@@ -349,21 +348,22 @@ restore !db = do
 -- This moves the compiled object file (first argument) to the appropriate
 -- location, and updates the database on disk.
 --
-persist :: KernelTable -> FilePath -> KernelKey -> IO ()
-persist (KT !_ !pt_ref) !cubin !key = withMVar pt_ref $ \_ -> do
+persist :: KernelTable -> ByteString -> KernelKey -> IO ()
+persist (KT !_ !pt_ref) !code !key = withMVar pt_ref $ \_ -> do
   cacheDir <- cacheDirectory
   let db        = cacheDir </> "persistent.db"
       cacheFile = cacheDir </> cacheFilePath key
   --
   message $ "persist/save: " ++ cacheFile
   createDirectoryIfMissing True (dropFileName cacheFile)
-  renameFile cubin cacheFile
-    -- If the temporary and cache directories are on different disks, we must
-    -- copy the file instead. Unsupported operation: (Cross-device link)
-    --
-    `catchIOError` \_ -> do
-      copyFile cubin cacheFile
-      removeFile cubin
+--  renameFile cubin cacheFile
+--    -- If the temporary and cache directories are on different disks, we must
+--    -- copy the file instead. Unsupported operation: (Cross-device link)
+--    --
+--    `catchIOError` \_ -> do
+--      copyFile cubin cacheFile
+--      removeFile cubin
+  BS.writeFile cacheFile code
   --
   withBinaryFile db ReadWriteMode $ \h -> do
     -- The file opens with the cursor at the beginning of the file

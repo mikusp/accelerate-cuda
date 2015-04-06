@@ -61,28 +61,22 @@ import System.IO
 import System.IO.Error
 import System.IO.Unsafe
 import System.Process
-import Text.PrettyPrint.Mainland                                ( ppr, renderCompact, displayLazyText )
+import Text.PrettyPrint.Mainland                                ( ppr, renderCompact, displayS )
 import qualified Data.ByteString                                as B
+import qualified Data.ByteString.Char8                          as BC
 import qualified Data.Text.Lazy                                 as T
 import qualified Data.Text.Lazy.IO                              as T
 import qualified Data.Text.Lazy.Encoding                        as T
 import qualified Control.Concurrent.MSem                        as Q
 import qualified Foreign.CUDA.Driver                            as CUDA
 import qualified Foreign.CUDA.Analysis                          as CUDA
+import qualified Foreign.CUDA.NVRTC.Error                       as CUDA
+import qualified Foreign.CUDA.NVRTC.Compile                     as CUDA
 
 import GHC.Conc                                                 ( getNumProcessors )
 
 #ifdef ACCELERATE_DEBUG
 import System.Time
-#endif
-
--- Multiplatform support for dealing with external process spawning
-#if   defined(UNIX)
-import System.Posix.Process
-#elif defined(WIN32)
-import System.Win32.Process hiding (ProcessHandle)
-#else
-#error "I don't know what operating system I am"
 #endif
 
 import Paths_accelerate_cuda                                    ( getDataDir )
@@ -479,7 +473,7 @@ link context table key =
   in do
     entry       <- fromMaybe intErr `fmap` KT.lookup context table key
     case entry of
-      CompileProcess cufile done -> do
+      CompileCall ptx -> do
         -- Wait for the compiler to finish and load the binary object into the
         -- current context.
         --
@@ -488,28 +482,26 @@ link context table key =
         -- only one thread will ever attempt to take the MVar in order to link
         -- the binary object.
         --
-        message "waiting for nvcc..."
-        let cubin       =  replaceExtension cufile ".cubin"
-        ()              <- takeMVar done
-        bin             <- B.readFile cubin
-        mdl             <- CUDA.loadData bin
+        message "waiting for nvrtcCompileProgram..."
+        code            <- takeMVar ptx
+        mdl             <- CUDA.loadData code
         lmdl            <- newLifetime mdl
         addFinalizer lmdl (module_finalizer weak_ctx key lmdl)
 
         -- Update hash tables and stash the binary object into the persistent
         -- cache
         --
-        KT.insert table key $! KernelObject bin (FL.singleton ctx lmdl)
-        KT.persist table cubin key
+        KT.insert table key $! KernelObject code (FL.singleton ctx lmdl)
+        KT.persist table code key
 
-        -- Remove temporary build products.
-        -- If compiling kernels with debugging symbols, leave the source files
-        -- in place so that they can be referenced by 'cuda-gdb'.
-        --
-        D.unless D.debug_cc $ do
-          removeFile      cufile
-          removeDirectory (dropFileName cufile)
-            `catchIOError` \_ -> return ()      -- directory not empty
+--        -- Remove temporary build products.
+--        -- If compiling kernels with debugging symbols, leave the source files
+--        -- in place so that they can be referenced by 'cuda-gdb'.
+--        --
+--        D.unless D.debug_cc $ do
+--          removeFile      cufile
+--          removeDirectory (dropFileName cufile)
+--            `catchIOError` \_ -> return ()      -- directory not empty
 
         return lmdl
 
@@ -535,125 +527,76 @@ compile table dev cunit = do
   context       <- asks activeContext
   exists        <- isJust `fmap` liftIO (KT.lookup context table key)
   unless exists $ do
-    message     $  unlines [ show key, T.unpack code ]
-    nvcc        <- fromMaybe (error "nvcc: command not found") <$> liftIO (findExecutable "nvcc")
-    (file,hdl)  <- openTemporaryFile "dragon.cu"   -- rawr!
-    flags       <- compileFlags file
-    done        <- liftIO $ do
-      T.hPutStr hdl code        `finally`     hClose hdl
-      enqueueProcess nvcc flags `onException` removeFile file
+    message     $  unlines [ show key, code ]
+    flags       <- compileFlags
+    ptx         <- liftIO $ compileKernel code entry flags
     --
-    liftIO $ KT.insert table key (CompileProcess file done)
+    liftIO $ KT.insert table key (CompileCall ptx)
   --
   return (entry, key)
   where
     entry       = show cunit
-    key         = (CUDA.computeCapability dev, hashlazy (T.encodeUtf8 code) )
-    code        = displayLazyText . renderCompact $ ppr cunit
+    key         = (CUDA.computeCapability dev, hashlazy (T.encodeUtf8 $ T.pack code) )
+    code        = flip displayS "" . renderCompact $ ppr cunit
 
 
 -- Determine the appropriate command line flags to pass to the compiler process.
 -- This is dependent on the host architecture and device capabilities.
 --
-compileFlags :: FilePath -> CIO [String]
-compileFlags cufile = do
+compileFlags :: CIO [String]
+compileFlags = do
   CUDA.Compute m n      <- CUDA.computeCapability `fmap` asks deviceProperties
   ddir                  <- liftIO getDataDir
   warnings              <- liftIO $ (&&) <$> D.queryFlag D.dump_cc <*> D.queryFlag D.verbose
   debug                 <- liftIO $ D.queryFlag D.debug_cc
   return                $  filter (not . null) $
-    [ "-I", ddir </> "cubits"
-    , "-arch=sm_" ++ show m ++ show n
-    , "-cubin"
---    , "--restrict"    -- requires nvcc >= 5.0
---    , "--maxrregcount", "32"
-    , "-o", cufile `replaceExtension` "cubin"
+    [ "-arch=compute_" ++ show m ++ show n
     , if warnings then ""   else "--disable-warnings"
     , if debug    then ""   else "-DNDEBUG"
-    , if debug    then "-G" else "-O3"
-    , machine
-    , cufile ]
-  where
-    machine     = case finiteBitSize (undefined :: Int) of
-                    32  -> "-m32"
-                    64  -> "-m64"
-                    _   -> $internalError "compileFlags" "unknown 'Int' size"
+    , if debug    then "-G" else ""
+    ]
 
+headers :: [(String, String)]
+headers = unsafePerformIO $ do
+    let files = [ "accelerate_cuda.h"
+                , "accelerate_cuda_assert.h"
+                , "accelerate_cuda_exceptional.h"
+                , "accelerate_cuda_function.h"
+                , "accelerate_cuda_texture.h"
+                , "accelerate_cuda_type.h"
+                ]
+    ddir <- getDataDir
+    contents <- mapM readFile (map (\x -> ddir </> "cubits" </> x) files)
+    return $ zip files contents
 
--- Open a unique file in the temporary directory used for compilation
--- by-products. The directory will be created if it does not exist.
---
-openTemporaryFile :: String -> CIO (FilePath, Handle)
-openTemporaryFile template = liftIO $ do
-  pid <- getProcessID
-  dir <- (</>) <$> getTemporaryDirectory <*> pure ("accelerate-cuda-" ++ show pid)
-  createDirectoryIfMissing True dir
-  openTempFile dir template
-
-#if defined(WIN32)
--- TLM: On windows, how do we get either the ProcessID or ProcessHandle of the
---      current process? For new, just use a dummy value (the sound of
---      disappearing down a rabbit hole...)
---
-getProcessID :: IO ProcessId
-getProcessID = return 0xaaaa
-#endif
-
-
--- Worker pool
--- -----------
-
-{-# NOINLINE workers #-}
-workers :: Q.MSem Int
-workers = unsafePerformIO $ Q.new =<< getNumProcessors
-
--- Queue a system process to be executed and return an MVar flag that will be
--- filled once the process completes. The task will only begin once there is a
--- worker available from the pool. This ensures we don't run out of process
--- handles or flood the IO bus, degrading performance.
---
-enqueueProcess :: FilePath -> [String] -> IO (MVar ())
-enqueueProcess nvcc flags = do
+compileKernel :: String -> String -> [String] -> IO (MVar B.ByteString)
+compileKernel code funName flags = do
   mvar  <- newEmptyMVar
   _     <- forkIO $ do
 
-    -- Wait for a worker to become available
-    (ccT, queueT) <- time $ Q.with workers $ do
+    (ptx, ccT) <- do
 
-      -- Initiate the external process...
-      ccBegin           <- getTime
-      (_,_,_,pid)       <- createProcess (proc nvcc flags)
+      ccBegin <- getTime
+      prog    <- CUDA.createProgram code funName headers
+      CUDA.compileProgram prog flags
+        `catch` \(e :: CUDA.NVRTCException) -> do
+          putStrLn =<< CUDA.getProgramLog prog
+          putStrLn code
+          putMVar mvar (throw e)
+      ptx <- CUDA.getPTX prog
+      CUDA.destroyProgram prog
+      ccEnd <- getTime
 
-      -- ... and wait for it to complete
-      waitFor pid
-        -- If compilation fails for some reason, fill the MVar by re-throwing
-        -- the exception. This prevents the host thread from waiting
-        -- indefinitely, which then requires the program to be killed manually.
-        `catch` \(e :: SomeException) -> do putMVar mvar (throw e)
-      ccEnd             <- getTime
-
-      return (diffTime ccBegin ccEnd)
+      return (ptx, diffTime ccBegin ccEnd)
     --
-    let msg2  = nvcc ++ " " ++ unwords flags
-        msg1  = "queue: " ++ D.showFFloatSIBase (Just 3) 1000 queueT "s, "
-           ++ "execute: " ++ D.showFFloatSIBase (Just 3) 1000 ccT    "s"
+    let msg2  = "nvrtcCompileProgram: " ++ unwords flags
+        msg1  = "compile: " ++ D.showFFloatSIBase (Just 3) 1000 ccT "s"
 
     message $ intercalate "\n     ... " [msg1, msg2]
 
-    -- Signal to the host thread that the compiled result is available
-    putMVar mvar ()
+    putMVar mvar (BC.pack ptx)
   --
   return mvar
-
-
--- Wait for a (compilation) process to finish
---
-waitFor :: ProcessHandle -> IO ()
-waitFor pid = do
-  status <- waitForProcess pid
-  case status of
-    ExitSuccess   -> return ()
-    ExitFailure c -> error $ "nvcc terminated abnormally (" ++ show c ++ ")"
 
 
 -- Debug
