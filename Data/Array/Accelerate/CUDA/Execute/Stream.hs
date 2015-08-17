@@ -1,5 +1,8 @@
-{-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE CPP          #-}
+{-# LANGUAGE BangPatterns      #-}
+{-# LANGUAGE CPP               #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE ViewPatterns      #-}
+{-# OPTIONS_GHC -fno-warn-orphans #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA.Execute.Stream
 -- Copyright   : [2013..2014] Manuel M T Chakravarty, Gabriele Keller, Trevor L. McDonell
@@ -17,13 +20,13 @@ module Data.Array.Accelerate.CUDA.Execute.Stream (
 ) where
 
 -- friends
-import Data.Array.Accelerate.CUDA.Array.Nursery                 ( ) -- hashable CUDA.Context instance
 import Data.Array.Accelerate.CUDA.Context                       ( Context(..) )
-import Data.Array.Accelerate.CUDA.FullList                      ( FullList(..) )
-import Data.Array.Accelerate.CUDA.Execute.Event                 ( Event )
+import Data.Array.Accelerate.CUDA.Execute.Event                 ( Event, EventTable )
+import Data.Array.Accelerate.FullList                           ( FullList(..) )
+import Data.Array.Accelerate.Lifetime                           ( Lifetime, withLifetime )
 import qualified Data.Array.Accelerate.CUDA.Execute.Event       as Event
-import qualified Data.Array.Accelerate.CUDA.FullList            as FL
 import qualified Data.Array.Accelerate.CUDA.Debug               as D
+import qualified Data.Array.Accelerate.FullList                 as FL
 
 -- libraries
 import Control.Monad.Trans                                      ( MonadIO, liftIO )
@@ -46,7 +49,7 @@ import qualified Data.HashTable.IO                              as HT
 --
 type HashTable key val  = HT.BasicHashTable key val
 
-type RSV                = MVar ( HashTable CUDA.Context (FullList () Stream) )
+type RSV                = MVar ( HashTable (Lifetime CUDA.Context) (FullList () Stream) )
 data Reservoir          = Reservoir {-# UNPACK #-} !RSV
                                     {-# UNPACK #-} !(Weak RSV)
 
@@ -60,11 +63,11 @@ data Reservoir          = Reservoir {-# UNPACK #-} !RSV
 -- second operation completes.
 --
 {-# INLINE streaming #-}
-streaming :: MonadIO m => Context -> Reservoir -> (Stream -> m a) -> (Event -> a -> m b) -> m b
-streaming !ctx !rsv@(Reservoir !_ !weak_rsv) !action !after = do
+streaming :: MonadIO m => Context -> Reservoir -> EventTable -> (Stream -> m a) -> (Event -> a -> m b) -> m b
+streaming !ctx !rsv@(Reservoir !_ !weak_rsv) !etbl !action !after = do
   stream <- liftIO $ create ctx rsv
   first  <- action stream
-  end    <- liftIO $ Event.waypoint stream
+  end    <- liftIO $ Event.waypoint ctx etbl stream
   final  <- after end first
   liftIO $! destroy (weakContext ctx) weak_rsv stream
   liftIO $! Event.destroy end
@@ -91,8 +94,8 @@ new = do
 {-# INLINE create #-}
 create :: Context -> Reservoir -> IO Stream
 create !ctx (Reservoir !ref !_) = withMVar ref $ \tbl -> do
-  let key = deviceContext ctx
   --
+  let key = deviceContext ctx
   ms    <- HT.lookup tbl key
   case ms of
     Nothing -> do
@@ -112,7 +115,7 @@ create !ctx (Reservoir !ref !_) = withMVar ref $ \tbl -> do
 -- pending operations in the stream have completed.
 --
 {-# INLINE destroy #-}
-destroy :: Weak CUDA.Context -> Weak RSV -> Stream -> IO ()
+destroy :: Weak (Lifetime CUDA.Context) -> Weak RSV -> Stream -> IO ()
 destroy !weak_ctx !weak_rsv !stream = do
   -- Wait for all preceding operations submitted to the stream to complete. Not
   -- necessary because of the setup of 'streaming'.
@@ -146,11 +149,11 @@ destroy !weak_ctx !weak_rsv !stream = do
 
 -- Destroy all streams in the reservoir.
 --
-flush :: HashTable CUDA.Context (FullList () Stream) -> IO ()
+flush :: HashTable (Lifetime CUDA.Context) (FullList () Stream) -> IO ()
 flush !tbl =
-  let clean (!ctx,!ss) = do
-        bracket_ (CUDA.push ctx) CUDA.pop (FL.mapM_ (const Stream.destroy) ss)
-        HT.delete tbl ctx
+  let clean (!lctx,!ss) = do
+        withLifetime lctx $ \ctx -> bracket_ (CUDA.push ctx) CUDA.pop (FL.mapM_ (const Stream.destroy) ss)
+        HT.delete tbl lctx
   in
   message "flush reservoir" >> HT.mapM_ clean tbl
 

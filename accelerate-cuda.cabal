@@ -1,7 +1,7 @@
 Name:                   accelerate-cuda
 Version:                2.0.0.0
 Cabal-version:          >= 1.6
-Tested-with:            GHC == 7.8.*
+Tested-with:            GHC >= 7.8
 Build-type:             Simple
 
 Synopsis:               Accelerate backend for NVIDIA GPUs
@@ -42,6 +42,7 @@ Stability:              Experimental
 
 Data-files:             cubits/accelerate_cuda.h
                         cubits/accelerate_cuda_assert.h
+                        cubits/accelerate_cuda_exceptional.h
                         cubits/accelerate_cuda_function.h
                         cubits/accelerate_cuda_texture.h
                         cubits/accelerate_cuda_type.h
@@ -66,7 +67,7 @@ Flag debug
     .
     * -fflush-cache: delete the persistent kernel cache
     .
-  Default:              False
+  Default:              True
 
 Flag bounds-checks
   Description:          Enable bounds checking
@@ -83,9 +84,10 @@ Flag internal-checks
 Library
   Build-depends:        accelerate              == 2.0.*,
                         array                   >= 0.3,
-                        base                    == 4.7.*,
+                        base                    >= 4.7,
                         binary                  >= 0.7,
                         bytestring              >= 0.9,
+                        containers              >= 0.3,
                         cryptohash              >= 0.7,
                         cuda                    >= 0.6.0.2,
                         directory               >= 1.0,
@@ -102,7 +104,7 @@ Library
                         SafeSemaphore           >= 0.9,
                         srcloc                  >= 0.2,
                         text                    >= 0.11,
-                        template-haskell        >= 2.2,
+                        template-haskell,
                         transformers            >= 0.2,
                         unordered-containers    >= 0.1.4
 
@@ -110,7 +112,7 @@ Library
     cpp-options:        -DWIN32
     build-depends:      Win32                   >= 2.2.1
   else
-    cpp-options:        -DUNIX
+    cpp-options:        -DUNIX -DACCELERATE_DEBUG
     build-depends:      unix                    >= 2.4
 
   Exposed-modules:      Data.Array.Accelerate.CUDA
@@ -119,15 +121,17 @@ Library
   Other-modules:        Data.Array.Accelerate.CUDA.AST
                         Data.Array.Accelerate.CUDA.Analysis.Device
                         Data.Array.Accelerate.CUDA.Analysis.Launch
+                        Data.Array.Accelerate.CUDA.Array.Cache
                         Data.Array.Accelerate.CUDA.Array.Data
-                        Data.Array.Accelerate.CUDA.Array.Nursery
                         Data.Array.Accelerate.CUDA.Array.Prim
                         Data.Array.Accelerate.CUDA.Array.Slice
                         Data.Array.Accelerate.CUDA.Array.Sugar
                         Data.Array.Accelerate.CUDA.Array.Table
                         Data.Array.Accelerate.CUDA.Async
                         Data.Array.Accelerate.CUDA.CodeGen
+                        Data.Array.Accelerate.CUDA.CodeGen.Arithmetic
                         Data.Array.Accelerate.CUDA.CodeGen.Base
+                        Data.Array.Accelerate.CUDA.CodeGen.Constant
                         Data.Array.Accelerate.CUDA.CodeGen.IndexSpace
                         Data.Array.Accelerate.CUDA.CodeGen.Mapping
                         Data.Array.Accelerate.CUDA.CodeGen.Monad
@@ -145,7 +149,6 @@ Library
                         Data.Array.Accelerate.CUDA.Execute.Stream
                         Data.Array.Accelerate.CUDA.Foreign.Export
                         Data.Array.Accelerate.CUDA.Foreign.Import
-                        Data.Array.Accelerate.CUDA.FullList
                         Data.Array.Accelerate.CUDA.Persistent
                         Data.Array.Accelerate.CUDA.State
                         Paths_accelerate_cuda

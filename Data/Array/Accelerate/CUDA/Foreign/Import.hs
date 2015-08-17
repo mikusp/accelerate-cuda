@@ -44,7 +44,7 @@ module Data.Array.Accelerate.CUDA.Foreign.Import (
 
   -- * Manipulating arrays
   DevicePtrs,
-  devicePtrsOfArray,
+  withDevicePtrs,
   indexArray,
   useArray,  useArrayAsync,
   peekArray, peekArrayAsync,
@@ -53,7 +53,7 @@ module Data.Array.Accelerate.CUDA.Foreign.Import (
   allocateArray, newArray,
 
   -- * Running IO actions in an Accelerate context
-  CIO, liftIO, inContext, inDefaultContext
+  CIO, Stream, liftIO, inContext, inDefaultContext
 
 ) where
 
@@ -61,12 +61,15 @@ import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.CUDA.State
 import Data.Array.Accelerate.CUDA.Context
 import Data.Array.Accelerate.CUDA.Array.Sugar
-import Data.Array.Accelerate.CUDA.Array.Data
+import Data.Array.Accelerate.CUDA.Array.Data            hiding ( withDevicePtrs )
+import qualified Data.Array.Accelerate.CUDA.Array.Data  as D
 import Data.Array.Accelerate.CUDA.Array.Prim            ( DevicePtrs )
+import Data.Array.Accelerate.CUDA.Execute.Stream        ( Stream )
 
 import Data.Typeable
 import Control.Exception                                ( bracket_ )
 import Control.Monad.Trans                              ( liftIO )
+import qualified Foreign.CUDA.Driver.Stream             as CUDA
 
 
 -- CUDA backend representation of foreign functions
@@ -76,7 +79,7 @@ import Control.Monad.Trans                              ( liftIO )
 --
 data CUDAForeignAcc as bs where
   CUDAForeignAcc :: String                      -- name of the function
-                 -> (as -> CIO bs)              -- operation to execute
+                 -> (Stream -> as -> CIO bs)    -- operation to execute
                  -> CUDAForeignAcc as bs
 
 deriving instance Typeable CUDAForeignAcc
@@ -90,7 +93,7 @@ instance Foreign CUDAForeignAcc where
 canExecuteAcc
     :: (Foreign f, Typeable as, Typeable bs)
     => f as bs
-    -> Maybe (as -> CIO bs)
+    -> Maybe (Stream -> as -> CIO bs)
 canExecuteAcc ff
   | Just (CUDAForeignAcc _ fun) <- cast ff
   = Just fun
@@ -130,10 +133,11 @@ canExecuteExp ff
 -- User facing utility functions
 -- -----------------------------
 
--- |Get the raw CUDA device pointers associated with an array
+-- |Get the raw CUDA device pointers associated with an array and call the given
+-- continuation.
 --
-devicePtrsOfArray :: Array sh e -> CIO (DevicePtrs (EltRepr e))
-devicePtrsOfArray (Array _ adata) = devicePtrsOfArrayData adata
+withDevicePtrs :: Array sh e -> Maybe CUDA.Stream -> (DevicePtrs (EltRepr e) -> CIO b) -> CIO b
+withDevicePtrs (Array _ adata) = D.withDevicePtrs adata
 
 -- |Run an IO action within the given Acclerate context
 --

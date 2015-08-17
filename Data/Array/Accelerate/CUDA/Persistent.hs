@@ -24,35 +24,36 @@ module Data.Array.Accelerate.CUDA.Persistent (
 
 -- friends
 import Data.Array.Accelerate.Error
+import Data.Array.Accelerate.FullList                   ( FullList )
+import Data.Array.Accelerate.Lifetime                   ( Lifetime, withLifetime, newLifetime )
 import Data.Array.Accelerate.CUDA.Context
-import Data.Array.Accelerate.CUDA.FullList              ( FullList )
 import qualified Data.Array.Accelerate.CUDA.Debug       as D
-import qualified Data.Array.Accelerate.CUDA.FullList    as FL
+import qualified Data.Array.Accelerate.FullList         as FL
 
 -- libraries
-import Prelude                                          hiding ( lookup )
 import Numeric
-import Data.Char
-import System.IO
-import System.FilePath
-import System.Directory
-import System.IO.Error
-import System.Mem.Weak
 import Control.Applicative
 import Control.Concurrent
 import Control.Exception
 import Control.Monad                                    ( when )
-import Data.Version
-import Data.Maybe                                       ( fromMaybe )
 import Data.Binary
-import Data.Hashable
 import Data.Binary.Get
 import Data.ByteString                                  ( ByteString )
 import Data.ByteString.Internal                         ( w2c )
+import Data.Char
+import Data.Hashable
+import Data.Maybe                                       ( fromMaybe )
+import Data.Version
+import System.Directory
+import System.FilePath
+import System.IO
+import System.IO.Error
+import System.Mem.Weak
 import qualified Data.ByteString                        as BS
 import qualified Data.ByteString.Lazy                   as BL
 import qualified Data.ByteString.Lazy.Internal          as BL
 import qualified Data.HashTable.IO                      as HT
+import Prelude                                          hiding ( lookup )
 
 import qualified Foreign.CUDA.Driver                    as CUDA
 
@@ -117,8 +118,9 @@ lookup context (KT !kt_ref !pt_ref) !key = withMVar kt_ref $ \kt -> do
         cubin   <- (</>) <$> cacheDirectory <*> pure (cacheFilePath key)
         bin     <- BS.readFile cubin
         !mdl    <- CUDA.loadData bin
-        let obj  = KernelObject bin (FL.singleton (deviceContext context) mdl)
-        addFinalizer mdl (module_finalizer (weakContext context) key mdl)
+        lmdl    <- newLifetime mdl
+        let obj  = KernelObject bin (FL.singleton (deviceContext context) lmdl)
+        addFinalizer lmdl (module_finalizer (weakContext context) key lmdl)
         HT.insert kt key obj
         return  $! Just obj
 
@@ -137,13 +139,14 @@ insert (KT !kt_ref !_) !key !val = withMVar kt_ref $ \kt -> HT.insert kt key val
 
 -- Unload a kernel module from the specified context
 --
-module_finalizer :: Weak CUDA.Context -> KernelKey -> CUDA.Module -> IO ()
-module_finalizer weak_ctx key mdl = do
+module_finalizer :: Weak (Lifetime CUDA.Context) -> KernelKey -> Lifetime CUDA.Module -> IO ()
+module_finalizer weak_ctx key lmdl = do
   mc <- deRefWeak weak_ctx
   case mc of
     Nothing     -> D.traceIO D.dump_gc ("gc: finalise module/dead context: " ++ cacheFilePath key)
-    Just ctx    -> D.traceIO D.dump_gc ("gc: finalise module: "              ++ cacheFilePath key)
-                >> bracket_ (CUDA.push ctx) CUDA.pop (CUDA.unload mdl)
+    Just fctx   -> D.traceIO D.dump_gc ("gc: finalise module: "              ++ cacheFilePath key)
+                >> withLifetime fctx (\ctx -> withLifetime lmdl (\mdl ->
+                     bracket_ (CUDA.push ctx) CUDA.pop (CUDA.unload mdl)))
 
 
 -- Local cache -----------------------------------------------------------------
@@ -183,7 +186,8 @@ data KernelEntry
   -- re-link into the current context.
   --
   | KernelObject {-# UNPACK #-} !ByteString
-                 {-# UNPACK #-} !(FullList CUDA.Context CUDA.Module)
+                 {-# UNPACK #-} !(FullList (Lifetime CUDA.Context)
+                                           (Lifetime CUDA.Module))
 
 
 -- Persistent cache ------------------------------------------------------------

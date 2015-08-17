@@ -9,6 +9,7 @@
 {-# LANGUAGE TypeFamilies             #-}
 {-# LANGUAGE FlexibleInstances        #-}
 {-# LANGUAGE ImpredicativeTypes       #-}
+{-# LANGUAGE ViewPatterns             #-}
 {-# OPTIONS_GHC -fno-warn-name-shadowing #-}
 {-# OPTIONS_GHC -fno-warn-orphans        #-}
 -- |
@@ -39,18 +40,19 @@ module Data.Array.Accelerate.CUDA.Foreign.Export (
 
 ) where
 
-import Prelude                                          as P
 import Data.Functor
 import Control.Applicative
+import Control.Monad.State                              ( liftIO )
 import Foreign.StablePtr
 import Foreign.C.Types
 import Foreign.Ptr
 import Foreign.Storable                                 ( Storable(..) )
 import Foreign.Marshal.Array                            ( peekArray, pokeArray, mallocArray )
 import Foreign.Marshal.Alloc                            ( free )
-import Control.Monad.State                              ( liftIO )
-import qualified Foreign.CUDA.Driver                    as CUDA
 import Language.Haskell.TH                              hiding ( ppr )
+import qualified Foreign.CUDA.Driver                    as CUDA
+
+import Prelude                                          as P
 
 -- friends
 import Data.Array.Accelerate.Smart                      ( Acc )
@@ -211,12 +213,13 @@ runProgram hndl fun input output = do
           shbuf <- liftIO $ mallocArray (P.length sh')
           liftIO $ pokeArray shbuf (map fromIntegral sh')
 
-          dptrs <- devicePtrsToWordPtrs adata <$> devicePtrsOfArrayData adata
-          pbuf  <- liftIO $ mallocArray (P.length dptrs)
-          liftIO $ pokeArray pbuf dptrs
+          withDevicePtrs adata Nothing $ \dptrs -> do
+            let wptrs = devicePtrsToWordPtrs adata dptrs
+            pbuf  <- liftIO $ mallocArray (P.length wptrs)
+            liftIO $ pokeArray pbuf wptrs
 
-          sa <- liftIO $ newStablePtr (EArray a)
-          return (shbuf, pbuf, sa)
+            sa <- liftIO $ newStablePtr (EArray a)
+            return (shbuf, pbuf, sa)
 
     marshalOut (ArraysRpair aR1 aR2) (x,y) ptr = do
       ptr' <- marshalOut aR1 x ptr
