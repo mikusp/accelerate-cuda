@@ -24,14 +24,14 @@ module Data.Array.Accelerate.CUDA.CodeGen (
 ) where
 
 -- libraries
-import Prelude                                                  hiding ( id, exp, replicate )
-import Control.Applicative                                      ( (<$>), (<*>) )
-import Control.Monad.State.Strict
 import Data.HashSet                                             ( HashSet )
+import Control.Monad.State.Strict
 import Foreign.CUDA.Analysis
 import Language.C.Quote.CUDA
 import qualified Language.C                                     as C
 import qualified Data.HashSet                                   as Set
+import Control.Applicative                                      hiding ( Const )
+import Prelude                                                  hiding ( id, exp, replicate )
 
 -- friends
 import Data.Array.Accelerate.Error
@@ -437,6 +437,9 @@ codegenOpenExp dev aenv = cvtE
         PrimAsin ty             -> unary (A.asin ty) x env
         PrimAcos ty             -> unary (A.acos ty) x env
         PrimAtan ty             -> unary (A.atan ty) x env
+        PrimSinh ty             -> unary (A.sinh ty) x env
+        PrimCosh ty             -> unary (A.cosh ty) x env
+        PrimTanh ty             -> unary (A.tanh ty) x env
         PrimAsinh ty            -> unary (A.asinh ty) x env
         PrimAcosh ty            -> unary (A.acosh ty) x env
         PrimAtanh ty            -> unary (A.atanh ty) x env

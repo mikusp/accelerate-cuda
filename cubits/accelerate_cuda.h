@@ -19,5 +19,7 @@
 #include "accelerate_cuda_texture.h"
 #include "accelerate_cuda_type.h"
 
+#include <math_constants.h>
+
 #endif
 
