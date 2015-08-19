@@ -148,11 +148,11 @@ __inline__ __device__ float shfl_up32(float var, unsigned int delta, int width)
 template <typename T>
 static __inline__ __device__ T shfl_up64(T var, unsigned int delta, int width=warpSize)
 {
-    union { T a; struct { Int32 lo; Int32 hi; }; } u, v;
+    union { T a; struct { Int32 lo; Int32 hi; } b; } u, v;
 
     v.a  = var;
-    u.lo = __shfl_up(v.lo, delta, warpSize);
-    u.hi = __shfl_up(v.hi, delta, warpSize);
+    u.b.lo = __shfl_up(v.b.lo, delta, warpSize);
+    u.b.hi = __shfl_up(v.b.hi, delta, warpSize);
 
     return u.a;
 }
@@ -185,11 +185,11 @@ __inline__ __device__ float shfl_xor32(float var, int laneMask, int width)
 template <typename T>
 static __inline__ __device__ T shfl_xor64(T var, int laneMask, int width=warpSize)
 {
-    union { T a; struct { Int32 lo; Int32 hi; }; } u, v;
+    union { T a; struct { Int32 lo; Int32 hi; } b; } u, v;
 
     v.a  = var;
-    u.lo = __shfl_xor(v.lo, laneMask, warpSize);
-    u.hi = __shfl_xor(v.hi, laneMask, warpSize);
+    u.b.lo = __shfl_xor(v.b.lo, laneMask, warpSize);
+    u.b.hi = __shfl_xor(v.b.hi, laneMask, warpSize);
 
     return u.a;
 }
