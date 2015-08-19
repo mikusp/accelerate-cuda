@@ -555,6 +555,7 @@ compileFlags = do
     , if warnings then ""   else "--disable-warnings"
     , if debug    then ""   else "-DNDEBUG"
     , if debug    then "-G" else ""
+    , "--std=c++11"
     ]
 
 headers :: [(String, String)]
