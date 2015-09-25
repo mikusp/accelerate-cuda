@@ -2,6 +2,9 @@
 {-# LANGUAGE CPP                 #-}
 {-# LANGUAGE GADTs               #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE AutoDeriveTypeable #-}
+{-# LANGUAGE NoMonomorphismRestriction #-}
 -- |
 -- Module      : Data.Array.Accelerate.CUDA
 -- Copyright   : [2008..2014] Manuel M T Chakravarty, Gabriele Keller
@@ -189,6 +192,9 @@ module Data.Array.Accelerate.CUDA (
   run, run1, runWith, run1With,
   stream, streamOut, streamWith, streamOutWith,
 
+  Remote(..),
+  run1Remote, run1FullRemote, collectRemote,
+
   -- * Asynchronous execution
   Async, wait, poll, cancel,
   runAsync, run1Async, runAsyncWith, run1AsyncWith,
@@ -210,7 +216,7 @@ import Prelude
 import Data.Array.Accelerate.Trafo
 import Data.Array.Accelerate.Smart                      ( Acc, Seq )
 import Data.Array.Accelerate                            ( mapSeq, streamIn )
-import Data.Array.Accelerate.Array.Sugar                ( Arrays(..), ArraysR(..) )
+import Data.Array.Accelerate.Array.Sugar                ( Arrays(..), ArraysR(..), ArrRepr )
 import Data.Array.Accelerate.CUDA.Array.Data
 import Data.Array.Accelerate.CUDA.Async
 import Data.Array.Accelerate.CUDA.State
@@ -350,6 +356,26 @@ stream :: (Arrays a, Arrays b) => (Acc a -> Acc b) -> [a] -> [b]
 stream f arrs
   = unsafePerformIO
   $ evaluate (streamWith defaultContext f arrs)
+
+data Remote a where
+    Remote :: Arrays arrs => arrs -> Remote arrs
+
+run1Remote :: (Arrays a, Arrays b) => (Acc a -> Acc b) -> a -> Remote b
+run1Remote f = \a -> unsafePerformIO $ Remote <$> (execute a)
+  where
+    !acc      = convertAfunWith config f
+    !afun     = unsafePerformIO $ evalCUDA defaultContext (compileAfun acc) >>= dumpStats
+    execute a = evalCUDA defaultContext (executeAfun1 afun a)
+
+run1FullRemote :: (Arrays a, Arrays b) => (Acc a -> Acc b) -> Remote a -> Remote b
+run1FullRemote f = \(Remote a) -> unsafePerformIO $ Remote <$> (execute a)
+  where
+    !acc      = convertAfunWith config f
+    !afun     = unsafePerformIO $ evalCUDA defaultContext (compileAfun acc) >>= dumpStats
+    execute a = evalCUDA defaultContext (executeAfun1 afun a)
+
+collectRemote :: Arrays arrs => Remote arrs -> IO arrs
+collectRemote (Remote a) = evalCUDA defaultContext $ collect a
 
 -- | As 'stream', but execute in the specified context.
 --
